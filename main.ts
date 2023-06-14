@@ -7,6 +7,33 @@ pins.setPull(DigitalPin.P2, PinPullMode.PullNone);
 let trigger: DigitalPin = DigitalPin.P2;
 let echo: DigitalPin = DigitalPin.P1;
 
+let direction: number = chooseAvoidanceDirection();
+let autoModeEnabled: boolean = true;
+let servoStartPosition: number = 90; // Initial servo position
+let servoTurnLeftPosition: number = 45; // Servo position for turning left
+let servoTurnRightPosition: number = 135; // Servo position for turning right
+
+radio.onReceivedNumber(function (receivedNumber: number) {
+    if (receivedNumber === 1) {
+        control12(50, 0); // Turn left
+    } else if (receivedNumber === 2) {
+        control12(0, 50); // Turn right
+    }
+});
+
+function turning(num: number = 0) {
+    if (num === 1) {
+        control12(-40, 100);
+        turn = 0;
+    } else if (num === 2) {
+        control12(100 - 40);
+        turn = 0;
+    } else {
+        control12(100, 100);
+        turn = 0;
+    }
+}
+
 function control12(left: number = 0, right: number = 0) {
     let lw = Math.map(left, -100, 100, -200, 200) * -1;
     let rw = Math.map(right, -100, 100, -160, 160) * -1;
@@ -15,76 +42,94 @@ function control12(left: number = 0, right: number = 0) {
 }
 
 function chooseAvoidanceDirection(): number {
-    let randomDirection: number = Math.randomRange(0, 1); // Náhodně vybrat směr vyhýbání se
-    if (randomDirection === 0) {
-        return -1; // Otočení doleva
+    let leftDistance: number = sonar.ping(DigitalPin.P1, DigitalPin.P2, PingUnit.Centimeters); // Left distance
+    let rightDistance: number = sonar.ping(DigitalPin.P2, DigitalPin.P1, PingUnit.Centimeters); // Right distance
+
+    if (leftDistance < rightDistance) {
+        return -1; // Turn left
     } else {
-        return 1; // Otočení doprava
+        return 1; // Turn right
     }
 }
 
 function performAvoidanceManeuver(direction: number): void {
-    let avoidanceDuration: number = 1000; // Doba trvání manévru vyhýbání se (v milisekundách)
-    control12(80 * direction, 80 * -direction); // Jízda ve vybraném směru
+    let avoidanceDuration: number = 1000; // Avoidance maneuver duration (in milliseconds)
+    control12(80 * direction, 80 * -direction); // Drive in the selected direction
     basic.pause(avoidanceDuration);
-    PCAmotor.MotorStopAll();
 }
 
-let direction: number = chooseAvoidanceDirection();
-let autoModeEnabled: boolean = true;
+function rotateServo(position: number): void {
+    PCAmotor.Servo(PCAmotor.Servos.S1, position);
+    basic.pause(500); // Wait for the servo to reach the target position
+}
 
 basic.forever(function () {
     if (autoModeEnabled) {
-        let obstacleThreshold: number = 10; // Práh pro detekci překážky (v centimetrech)
-        let distance: number = sonar.ping(
-            DigitalPin.P1,
-            DigitalPin.P2,
-            PingUnit.Centimeters
-        );
+
+        if (modeSwitch === 0 && crossroadSwitch === 1) {
+            rotateServo(servoStartPosition);
+            rotateServo(servoTurnLeftPosition);
+            rotateServo(servoStartPosition);
+            rotateServo(servoTurnRightPosition);
+            rotateServo(servoStartPosition);
+            direction = chooseAvoidanceDirection();
+            control12(60, 60);
+            crossroadSwitch = 0;
+        }
+        let obstacleThreshold: number = 10; // Obstacle detection threshold (in centimeters)
+        let distance: number = sonar.ping(DigitalPin.P1, DigitalPin.P2, PingUnit.Centimeters);
 
         if (distance > 0 && distance < obstacleThreshold) {
-            // Překážka v blízkosti, vykonat vyhýbací manévr
+            // Obstacle nearby, perform avoidance maneuver
             performAvoidanceManeuver(direction);
         } else {
-            // Žádná překážka, řízení vozidla na základě senzorových dat
+
+            // No obstacle, control the vehicle based on sensor data
             let c: number = pins.digitalReadPin(center);
             let l: number = pins.digitalReadPin(left);
             let r: number = pins.digitalReadPin(right);
 
             if (c) {
-                control12(60, 60); // Jízda rovně
+                control12(80, 80); // Drive straight
             } else if (l) {
-                control12(-40, 100); // Otočení doleva
+
+                control12(-60, 100); // Turn left
             } else if (r) {
-                control12(100, -40); // Otočení doprava
-            } else if (l == path && r == path) {
-                control12(60, 60); // Jízda rovně
-            } else if (l != path && r != path && c != path) {
-                control12(-60, -60); // Zpětná jízda
+                control12(100, -60); // Turn right
+
+            } else if (l === path && r === path) {
+                control12(60, 60); // Drive straight
+
+            } else if (l !== path && r !== path && c !== path) {
+                control12(-60, -60); 
+                crossroadSwitch = 1
                 basic.pause(250);
                 PCAmotor.MotorStopAll();
 
-                if (counting >= 10) {
-                    radio.onReceivedNumber(function (receivedNumber: number) {
-                        if (receivedNumber === 1) {
-                            control12(50, 0); // Otočení doleva
-                        }
-                        if (receivedNumber === 2) {
-                            control12(0, 50); // Otočení doprava
-                        }
-                    })
+                if (turn === 1) {
+                    control12(100, -60);
 
-                    counting = 0;
-                } else if (counting < 10) {
-                    counting = counting + 1;
+                } else if (turn === 2) {
+                    control12(-60, 100);
+
+                } else {
+                    control12(60, 60);
+                }
+                if (left === path && right !== path && center !== path){
+                    crossroadSwitch = 1
                     PCAmotor.MotorStopAll();
+
+                } else if (left != path && right == path && center !== path){
+                    crossroadSwitch = 1
+                    PCAmotor.MotorStopAll();
+
                 }
             }
         }
     }
 });
 
-
+let turn = 0;
 let modeSwitch: number = 0;
 let path: number = 1;
 let crossroadSwitch: number = 0;
@@ -99,56 +144,4 @@ let right: DigitalPin = DigitalPin.P13;
 
 
 
-
-
-function onForever() {
-    if (modeSwitch === 0) {
-        let senzorL = pins.digitalReadPin(left);
-        let senzorR = pins.digitalReadPin(right);
-        if (senzorL == path && senzorR == path) {
-            if (crossroadSwitch == 0) {
-                control12(60, 60);
-            } else if (crossroadSwitch == 1) {
-                PCAmotor.MotorStopAll();
-                counting = 0;
-            }
-        } else if (senzorL != path && senzorR != path) {
-            PCAmotor.MotorStopAll();
-            if (counting >= 10) {
-                control12(870, 1);
-                counting = 0;
-            } else if (counting < 10) {
-                counting = counting + 1;
-                PCAmotor.MotorStopAll();
-                control12(50, 100);
-                control12( -50, 100);
-                
-            }
-        } else if (senzorL == path && senzorR != path) {
-            control12(-80, 0);
-            counting = 0;
-        } else if (senzorL != path && senzorR == path) {
-            control12(0, 100);
-            counting = 0;
-        }
-    } else if (modeSwitch == 1) {
-        if (path == 1) {
-            PCAmotor.MotorRun(PCAmotor.Motors.M1, 0);
-            PCAmotor.MotorRun(PCAmotor.Motors.M4, 0);
-        } else if (path == 0) {
-            control12(400, 1);
-            control12( 510, 1);
-            control12( 1100, 1);
-            control12( 480, 1);
-            control12( 2100, 1);
-            control12( 500, 1);
-            control12( 900, 1);
-            control12( 480, 1);
-        }
-    }
-}
-
-
-
-  
 
